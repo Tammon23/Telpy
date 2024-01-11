@@ -38,10 +38,14 @@ class Client(ReceiveableData):
         client = self.client
         while True:
             try:
-                message_length = client.recv(4)
-                buffer = [client.recv(MAX_BYTE_TRANSFER) for _ in range(int.from_bytes(message_length, byteorder='big'))]
-                obj = self.get_from_bytes(buffer)
+                message_length = int.from_bytes(client.recv(4), byteorder='big')
+                buffer = []
+                while message_length != 0:
+                    read = min(message_length, MAX_BYTE_TRANSFER)
+                    buffer.append(client.recv(read))
+                    message_length -= read
 
+                obj = self.get_from_bytes(buffer)
                 if isinstance(obj, Profile):
                     self.send(self.profile)
                 elif isinstance(obj, Text):

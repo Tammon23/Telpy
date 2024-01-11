@@ -57,8 +57,13 @@ class Server(ReceiveableData):
 
             # ask client for a name
             self.send(Profile(), client)
-            message_length = client.recv(4)
-            buffer = [client.recv(MAX_BYTE_TRANSFER) for _ in range(int.from_bytes(message_length, byteorder='big'))]
+            message_length = int.from_bytes(client.recv(4), byteorder='big')
+
+            buffer = []
+            while message_length != 0:
+                read = min(message_length, MAX_BYTE_TRANSFER)
+                buffer.append(client.recv(read))
+                message_length -= read
             obj = self.get_from_bytes(buffer)
 
             if obj is None or not isinstance(obj, Profile):
@@ -80,7 +85,7 @@ class Server(ReceiveableData):
             thread.start()
 
     def broadcast_message(self, message: SendableData, excluding: str | None = None) -> None:
-        message_bytes = message.get_as_bytes()
+        message_bytes = list(message.get_as_bytes())
         for connected_client in self.connected_clients.values():
             if excluding is None or connected_client.username != excluding:
                 for data in message_bytes:
@@ -90,8 +95,13 @@ class Server(ReceiveableData):
         while True:
             try:
                 # get the message object
-                message_length = client.recv(4)
-                buffer = [client.recv(MAX_BYTE_TRANSFER) for _ in range(int.from_bytes(message_length, byteorder='big'))]
+                message_length = int.from_bytes(client.recv(4), byteorder='big')
+
+                buffer = []
+                while message_length != 0:
+                    read = min(message_length, MAX_BYTE_TRANSFER)
+                    buffer.append(client.recv(read))
+                    message_length -= read
                 obj = self.get_from_bytes(buffer)
 
                 # if the user wants to quit the session, terminate their connection
