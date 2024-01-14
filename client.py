@@ -10,6 +10,7 @@ class Client(ReceiveableData):
     def __init__(self, username: str, host: str = None, port: int = None, client: socket.socket = None):
         self.username = username
         self.profile = Profile(username)
+        self.active_threads: list[threading.Thread] = []
         if client is None:
             if host is None or port is None:
                 raise ValueError("Either provide a client or a host and port")
@@ -20,23 +21,27 @@ class Client(ReceiveableData):
         else:
             self.client = client
 
+        self.CONNECTED_TO_SERVER = True
+
     def start(self):
         read_packet_thread = threading.Thread(target=self.read_packet)
         read_packet_thread.start()
 
-        send_packet_thread = threading.Thread(target=self.send_packet)
+        send_packet_thread = threading.Thread(target=self.send_packet, daemon=True)
         send_packet_thread.start()
+
+        self.active_threads = [read_packet_thread, send_packet_thread]
 
     def send(self, message: SendableData):
         for data in message.get_as_bytes():
             self.client.send(data)
 
     def close(self):
-        self.client.close()
+        self.client.shutdown(socket.SHUT_RDWR)
 
     def read_packet(self):
         client = self.client
-        while True:
+        while self.CONNECTED_TO_SERVER:
             try:
                 message_length = int.from_bytes(client.recv(4), byteorder='big')
                 buffer = []
@@ -57,17 +62,23 @@ class Client(ReceiveableData):
                 else:
                     print("ERROR")
 
-            except Exception as e:
+            except EOFError:
+                print("Successfully disconnected.")
+                self.CONNECTED_TO_SERVER = False
+                self.close()
+                break
+            except ZeroDivisionError as e:
                 print(f"An error occurred ==> {e}")
-                self.client.close()
+                self.close()
                 break
 
     def send_packet(self):
-        while True:
-            message = input()
+        while self.CONNECTED_TO_SERVER:
+            message = input("> ")
 
             if message == 'quit':
                 self.close()
+                self.CONNECTED_TO_SERVER = False
                 break
 
             # if input is a command

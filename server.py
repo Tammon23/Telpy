@@ -13,6 +13,8 @@ class Server(ReceiveableData):
         self.port = port
         self.name: str | None = name
         self.profile = Profile("SERVER")
+        self.ALLOW_NEW_MESSAGES: bool = True
+        self.ALLOW_NEW_CONNECTIONS: bool = True
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.connected_clients: dict[tuple[str, int], Client] = {}
@@ -25,7 +27,30 @@ class Server(ReceiveableData):
         SERVER.bind((HOST, PORT))
         SERVER.listen()
         print(f"Server started listening on {HOST}:{PORT}")
+
+        server_chat_thread = threading.Thread(target=self.listen_server_chat)
+        server_chat_thread.start()
+
         self.listen_for_connections()
+
+    def listen_server_chat(self):
+        while True:
+            message = input()
+
+            if message == "/quit":
+                self.ALLOW_NEW_CONNECTIONS = False
+                self.ALLOW_NEW_MESSAGES = False
+                self.broadcast_message(Text("Closing...", source=self.profile))
+                for client in self.connected_clients.values():
+                    client.client.shutdown(socket.SHUT_RDWR)
+                    client.client.close()
+
+                self.connected_clients.clear()
+                self.server.close()
+                break
+
+            else:
+                print("Unknown command:", message)
 
     def send(self, message: SendableData, client: Client | socket.socket) -> None:
         if isinstance(client, Client):
@@ -41,7 +66,7 @@ class Server(ReceiveableData):
         if termination_message is not None:
             print(termination_message)
 
-        client.close()
+        client.client.close()
 
     """ 
     listens for new connections to the server, when a connection is established
@@ -50,39 +75,44 @@ class Server(ReceiveableData):
     """
 
     def listen_for_connections(self):
-        while True:
-            # accept connection from new client
-            client, address = self.server.accept()  # address: host addr, port
-            print(f"New connection from {address}")
+        while self.ALLOW_NEW_CONNECTIONS:
+            try:
+                # accept connection from new client
+                client, address = self.server.accept()  # address: host addr, port
+                print(f"New connection from {address}")
 
-            # ask client for a name
-            self.send(Profile(), client)
-            message_length = int.from_bytes(client.recv(4), byteorder='big')
+                # ask client for a name
+                self.send(Profile(), client)
+                message_length = int.from_bytes(client.recv(4), byteorder='big')
 
-            buffer = []
-            while message_length != 0:
-                read = min(message_length, MAX_BYTE_TRANSFER)
-                buffer.append(client.recv(read))
-                message_length -= read
-            obj = self.get_from_bytes(buffer)
+                buffer = []
+                while message_length != 0:
+                    read = min(message_length, MAX_BYTE_TRANSFER)
+                    buffer.append(client.recv(read))
+                    message_length -= read
+                obj = self.get_from_bytes(buffer)
 
-            if obj is None or not isinstance(obj, Profile):
-                print("uh oh")
-                continue
+                if obj is None or not isinstance(obj, Profile):
+                    print("uh oh")
+                    continue
 
-            # grab the nickname from the users profile obj and save the client
-            nickname = obj.name
-            self.connected_clients[address] = Client(nickname, client=client)
+                # grab the nickname from the users profile obj and save the client
+                nickname = obj.name
+                self.connected_clients[address] = Client(nickname, client=client)
 
-            print(f"New client connected: {nickname}")
-            self.broadcast_message(Text(f"New client connected: {nickname}", source=self.profile), nickname)
+                print(f"New client connected: {nickname}")
+                self.broadcast_message(Text(f"New client connected: {nickname}", source=self.profile), nickname)
 
-            # telling the connected client that they connected safely
-            self.send(Text("Successfully connected to the server!", source=self.profile), client)
+                # telling the connected client that they connected safely
+                self.send(Text("Successfully connected to the server!", source=self.profile), client)
 
-            # starting thread to monitor all incoming messages
-            thread = threading.Thread(target=self.receive_message, args=(client,))
-            thread.start()
+                # starting thread to monitor all incoming messages
+                thread = threading.Thread(target=self.receive_message, args=(client,))
+                thread.start()
+
+            except OSError:
+                # do nothing, happens when client.recv(4) is currently blocking, but we close the connection
+                pass
 
     def broadcast_message(self, message: SendableData, excluding: str | None = None) -> None:
         message_bytes = list(message.get_as_bytes())
@@ -92,7 +122,7 @@ class Server(ReceiveableData):
                     connected_client.client.send(data)
 
     def receive_message(self, client: socket.socket) -> None:
-        while True:
+        while self.ALLOW_NEW_MESSAGES:
             try:
                 # get the message object
                 message_length = int.from_bytes(client.recv(4), byteorder='big')
@@ -113,7 +143,15 @@ class Server(ReceiveableData):
                     obj.source = self.connected_clients[client.getpeername()].profile
                     self.broadcast_message(obj)
 
-            except Exception as e:
+            except EOFError:
+                print(f"{self.connected_clients[client.getpeername()].profile.name} has disconnected from the server")
+                self.terminate_connection(client.getpeername())
+                break
+
+            except OSError:
+                # do nothing, happens when client.recv(4) is currently blocking, but we close the connection
+                break
+            except ZeroDivisionError as e:
                 print("An error occurred:", e)
                 self.terminate_connection(client.getpeername(), "An error occurred in your connection")
                 break
